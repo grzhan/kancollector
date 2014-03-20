@@ -45,6 +45,7 @@ function removeEventListener(event, listener){
 }
 
 
+
 fs.readFile("cachefile",function(err, data){
 	var SHIP_REF = tools.ship_db.ships("db");
 	
@@ -650,6 +651,189 @@ fs.readFile("cachefile",function(err, data){
 						});
 						return;
 					};break;
+					case "injured": {
+						if (!cache.ships) {
+							callback("Ship List not read yet. Please execute 'ships' first.");
+							return ;
+						}
+						var ship = null;
+						var out = "Injured Ships : \n"
+						var flag = 0;
+						for (var i=0; i<cache.ships.length;i++) {
+							ship = cache.ships[i];
+							if (parseInt(ship.nowhp) < parseInt(ship.maxhp)) {
+								flag = 1;
+								out += "[" + tools.pad(ship.id, 3) + "] " + tools.colorName(ship,ship.name,true) + " (Lv." + ship.lv + ")\t";
+								out +=  cache.ships[i].nowhp + '/' + cache.ships[i].maxhp + "\n";
+							}
+						}
+						if (flag === 1) {
+							callback(out);
+						} else {
+							callback("All ship girls are in health ")
+						}
+						return ;
+					}break;
+
+					case "autorepair": {
+						// Fetch Ships Info
+						var info = "Autorepair interrupted."
+						var error_flag = 0;
+						var waiting_time;
+						var waiting_milli_time;
+						var req = api.create(sesn_key);
+						var entry = "auth_member/logincheck";
+			
+						function autorepair() {
+							// Waiting some seconds ,than send next request...
+							// function sleep(time_seconds) {
+							// 	var milliseconds = time_seconds * 1000;
+							// 	var startTime = new Date().getTime();
+							// 	while (new Date().getTime() < (startTime + milliseconds));
+							// 	autorepair();
+							// }
+							waiting_time = -1;
+							api.api(entry, api.join(req, params), function(resp){
+
+								console.log("Fetching injured shipgirls Info ... ");
+								api.ships(sesn_key,s, function(stats){
+									if (stats.code == 200) {
+										var ships = stats.resp;
+										cache.ships = ships;
+										saveCache();
+									} else {
+										console.log(stats);
+										s = false;
+										info = "Autorepair interrupted";
+										callback(info);
+										return;
+									}
+									var ship = null;
+									var damage_ships = {};
+									var damage_len = 0;
+									for (var i=0; i<cache.ships.length;i++) {
+										ship = cache.ships[i];
+										if (parseInt(ship.nowhp) < parseInt(ship.maxhp)) {
+											damage_ships[parseInt(damage_len)] = ship; damage_len++;
+										}
+									}
+									if (damage_len === 0) {
+										s = false;
+										waiting_time = 0;
+										info = "\tAll shipgirls are in health, autorepair finished."
+										callback(info);
+										return;
+									} else {
+										console.log("\tNow " + damage_len + " shipgirls are in damage.");
+										console.log("Has found injured shipgirls, now fetching docks info...");
+										api.stats_dock(sesn_key, function(stats){
+											if (stats.code == 200) {
+												//  TODO
+												var docks = stats.resp;
+												var docks_empty = {};
+												var docks_remain = {};
+												var remain_len = 0;
+												var empty_len = 0;
+												var remain_time = 49766400;
+												var j =0;
+												var k =0;
+												for (i=0; i < docks.length; i++) {
+													if (docks[i].state == "empty") {
+														docks_empty[parseInt(empty_len)] = docks[i].id - 1;
+														empty_len ++;
+													} else if (docks[i].state != "locked") {
+														docks_remain[remain_len] = docks[i].id - 1;
+														remain_len++;
+														if (Math.floor(docks[i].remaining / 1000) < remain_time) {
+															remain_time = Math.floor(docks[i].remaining / 1000);
+															waiting_milli_time = Math.floor(docks[i].remaining);
+														}
+													}
+												}
+												console.log("\t"+ empty_len + " docks are empty.");
+												// if (remain_time != 49766400) console.log("Min remain time : " + tools.pretty_time(waiting_milli_time));
+												// console.log("EMPTY DOCKS : ");
+												// console.log(docks_empty);
+												// console.log("WORKING DOCKS: ");
+												// console.log(docks_remain);
+												var flag = 0;
+												var t_flag = 0;
+												if (empty_len > 0) {
+													for (var i=0; i<damage_len; i++)
+													{
+														flag = 0;
+														for (var j=0; j<remain_len; j++) {
+															if (damage_ships[i].id == docks[docks_remain[j]].ship) {
+																flag = 1;
+																break;
+															}
+														}
+														if (flag !== 1) {
+															t_flag = 1;
+															// console.log(docks[docks_empty[0]].id);
+															// console.log(damage_ships[i].id);
+															api.dock(sesn_key,docks[docks_empty[0]].id,damage_ships[i].id,false, function(state) {
+																// var resp = state.parsed;
+																if (state.resp.result_msg === "成功") {
+																	waiting_time = 0;
+																	console.log("\tHas put shipgirl["+ damage_ships[i].name +"] into docks[" + docks[docks_empty[0]].id +"]");
+																	console.log("===========================================================================================");
+																	autorepair();
+																} else {
+																	console.log(state);
+																	callback();
+																}
+															});
+															return ;
+														}
+													}
+													if (t_flag == 0) {
+														callback("All shipgirls are in repair...finished.");
+													}
+												} else {
+													waiting_time = remain_time;
+													for (var i = 0; i<damage_len ; i++) {
+														flag = 0;
+														for (var j=0; j< remain_len; j++) {
+															if (damage_ships[i].id == docks[docks_remain[j]].ship){
+																flag = 1;
+																break;
+															}
+														}
+														if (flag !== 1) {
+															t_flag = 1;
+															console.log("All docks are working, we need wait for a empty dock.");
+															console.log("\tRemaining time: " + tools.pretty_time(waiting_milli_time) + " seconds ...");
+															callback("Please keep your repl open.");
+
+															// sleep(waiting_time);
+															setTimeout( autorepair,waiting_milli_time);
+															return ;
+														}
+													}
+													if (t_flag === 0) {
+														callback("All shipgirls are in repair...FIN~");
+													}
+												}
+
+											} else {
+												console.log(stats);
+												s = false;
+												info = "Autorepair Interrupted";
+												waiting_time = 0;
+												callback(info);
+												return;
+											}
+										});
+									}
+								});
+							});
+						}
+						autorepair();
+						// callback(info);
+						return ;
+					} break;
+
 					case "help":{
 						var helpfile = command[1] ? command[1] : "help";
 						helpfile.replace(new RegExp("[/.]","g"),"");
